@@ -9,7 +9,7 @@ import io
 from argparse import Namespace
 
 
-flags = Namespace(
+values = Namespace(
     train_file='harry1.txt',
     seq_size=16,
     batch_size=16,
@@ -34,9 +34,9 @@ def get_data_from_file(train_file, batch_size, seq_size):
     sorted_vocab = sorted(word_counts, key=word_counts.get, reverse=True)
     int_to_vocab = {k: w for k, w in enumerate(sorted_vocab)}
     vocab_to_int = {w: k for k, w in int_to_vocab.items()}
-    n_vocab = len(int_to_vocab)
+    vocab_size = len(int_to_vocab)
 
-    print('Vocabulary size', n_vocab)
+    print('Vocabulary size', vocab_size)
 
     int_text = [vocab_to_int[w] for w in text]
     num_batches = int(len(int_text) / (seq_size * batch_size))
@@ -47,7 +47,7 @@ def get_data_from_file(train_file, batch_size, seq_size):
     in_text = np.reshape(in_text, (batch_size, -1))
     out_text = np.reshape(out_text, (batch_size, -1))
     #print('Batch count: ', len(in_text[0]))
-    return int_to_vocab, vocab_to_int, n_vocab, in_text, out_text
+    return int_to_vocab, vocab_to_int, vocab_size, in_text, out_text
 
 
 def get_batches(in_text, out_text, batch_size, seq_size):
@@ -56,30 +56,23 @@ def get_batches(in_text, out_text, batch_size, seq_size):
         yield in_text[:, i:i+seq_size], out_text[:, i:i+seq_size]
 
 
-class RNNModule(nn.Module):
-    def __init__(self, n_vocab, seq_size, embedding_size, lstm_size, num_layers=2, dropout=0.1):
-        super(RNNModule, self).__init__()
-        self.seq_size = seq_size
+class RNN(nn.Module):
+    def __init__(self, vocab_size, embedding_size, lstm_size, num_layers=2, dropout=0.1):
+        super(RNN, self).__init__()
         self.lstm_size = lstm_size
         self.num_layers = num_layers
-        self.embedding = nn.Embedding(n_vocab, embedding_size)
-        self.lstm = nn.LSTM(embedding_size,
-                            lstm_size,
-                            num_layers=num_layers,
-                            dropout=dropout,
-                            batch_first=True)
-        self.dense = nn.Linear(lstm_size, n_vocab)
+        self.embedding = nn.Embedding(vocab_size, embedding_size)
+        self.lstm = nn.LSTM(embedding_size, lstm_size, num_layers, dropout=dropout, batch_first=True)
+        self.lin1 = nn.Linear(lstm_size, vocab_size)
 
     def forward(self, x, prev_state):
         embed = self.embedding(x)
         output, state = self.lstm(embed, prev_state)
-        logits = self.dense(output)
-
-        return logits, state
+        output = self.lin1(output)
+        return output, state
 
     def zero_state(self, batch_size):
-        return (torch.zeros(self.num_layers, batch_size, self.lstm_size),
-                torch.zeros(self.num_layers, batch_size, self.lstm_size))
+        return (torch.zeros(self.num_layers, batch_size, self.lstm_size))
 
 
 def get_loss_and_train_op(net, lr=0.0005):
@@ -88,15 +81,17 @@ def get_loss_and_train_op(net, lr=0.0005):
 
     return criterion, optimizer
 
+
 def train(net, criterion, optimizer, n_vocab, in_text, out_text, vocab_to_int, int_to_vocab, device, epochs=200):
     iteration = 0
 
     for epochs in range(epochs):
         print("Epoch: %d" % (epochs + 1))
-        state_h, state_c = net.zero_state(flags.batch_size)
-        state_h = state_h.to(device)
-        state_c = state_c.to(device)
-        for x, y in get_batches(in_text, out_text, flags.batch_size, flags.seq_size):
+        state_h = net.zero_state(values.batch_size).to(device)
+        state_c = net.zero_state(values.batch_size).to(device)
+        #state_h = state_h.to(device)
+        #state_c = state_c.to(device)
+        for x, y in get_batches(in_text, out_text, values.batch_size, values.seq_size):
             iteration += 1
             net.train()
 
@@ -117,25 +112,29 @@ def train(net, criterion, optimizer, n_vocab, in_text, out_text, vocab_to_int, i
             state_c = state_c.detach()
 
             _ = torch.nn.utils.clip_grad_norm_(
-                net.parameters(), flags.gradients_norm)
+                net.parameters(), values.gradients_norm)
 
             optimizer.step()
 
         print('Loss: {}'.format(loss_value))
         if epochs % 10 == 0:
-            predict(device, net, flags.initial_words, n_vocab, vocab_to_int,
+            predict(device, net, values.initial_words, n_vocab, vocab_to_int,
                     int_to_vocab, top_k=5)
+
+    predict(device, net, values.initial_words, n_vocab, vocab_to_int,
+            int_to_vocab, top_k=5)
 
     return net
 
 
-def predict(device, net, words, n_vocab, vocab_to_int, int_to_vocab, top_k=flags.predict_top_k):
+def predict(device, net, words, n_vocab, vocab_to_int, int_to_vocab, top_k=values.predict_top_k):
     net.eval()
     #words = flags.initial_words
     words = ['Harry', 'Potter']
     #words = ['Sehr']
     
-    state_h, state_c = net.zero_state(1)
+    state_h = net.zero_state(1)
+    state_c = net.zero_state(1)
     state_h = state_h.to(device)
     state_c = state_c.to(device)
     for w in words:
@@ -163,17 +162,15 @@ def predict(device, net, words, n_vocab, vocab_to_int, int_to_vocab, top_k=flags
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     int_to_vocab, vocab_to_int, n_vocab, in_text, out_text = get_data_from_file(
-        flags.train_file, flags.batch_size, flags.seq_size)
+        values.train_file, values.batch_size, values.seq_size)
 
-    net = RNNModule(n_vocab, flags.seq_size,
-                    flags.embedding_size, flags.lstm_size)
+    net = RNN(n_vocab, values.embedding_size, values.lstm_size)
     net = net.to(device)
     
     criterion, optimizer = get_loss_and_train_op(net, 0.001)
 
-
-    #train
     net = train(net, criterion, optimizer, n_vocab, in_text, out_text, vocab_to_int, int_to_vocab, device)
+
 
 if __name__ == '__main__':
     main()
