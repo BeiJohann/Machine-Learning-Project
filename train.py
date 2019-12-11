@@ -1,13 +1,12 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
 import numpy as np
+
 from collections import Counter
 import os
 import io
 from argparse import Namespace
-
+from RNN import RNN
 
 values = Namespace(
     train_file='harry1.txt',
@@ -21,35 +20,16 @@ values = Namespace(
     sentence_num=5,
 )
 
-class RNN(nn.Module):
-    def __init__(self, vocab_size, embedding_size, lstm_size, num_layers=2, dropout=0.1):
-        super(RNN, self).__init__()
-        self.lstm_size = lstm_size
-        self.num_layers = num_layers
-        self.embedding = nn.Embedding(vocab_size, embedding_size)
-        self.lstm = nn.LSTM(embedding_size, lstm_size, num_layers, dropout=dropout, batch_first=True)
-        self.lin1 = nn.Linear(lstm_size, vocab_size)
-
-    def forward(self, x, prev_state):
-        embed = self.embedding(x)
-        output, state = self.lstm(embed, prev_state)
-        output = self.lin1(output)
-        return output, state
-
-    def zero_state(self, batch_size):
-        return (torch.zeros(self.num_layers, batch_size, self.lstm_size))
-
 
 def get_data_from_file(train_file, batch_size, seq_size):
     with open(train_file, 'r', encoding='utf-8') as f:
         text = f.read()
     text = text.split()
-    
+
     print('Word count: ', len(text))
-    
     # count every word and save count
     word_counts = Counter(text)
-    #sort them with the quantity
+    # sort them with the quantity
     sorted_vocab = sorted(word_counts, key=word_counts.get, reverse=True)
     # todo: remove sightns like '-'
     int_to_vocab = {k: w for k, w in enumerate(sorted_vocab)}
@@ -72,9 +52,9 @@ def get_data_from_file(train_file, batch_size, seq_size):
 
 
 def get_batches(in_text, out_text, batch_size, seq_size):
-    #print('in text: ',len(in_text),len(in_text[0]))
+    # print('in text: ',len(in_text),len(in_text[0]))
     for i in range(0, len(in_text[0]), seq_size):
-        yield in_text[:, i:i+seq_size], out_text[:, i:i+seq_size]
+        yield in_text[:, i:i + seq_size], out_text[:, i:i + seq_size]
 
 
 def get_loss_and_train_op(net, lr=0.0005):
@@ -95,7 +75,7 @@ def train(net, criterion, optimizer, n_vocab, in_text, out_text, vocab_to_int, i
             iteration += 1
             net.train()
 
-            #print('batch: ',x.shape)
+            # print('batch: ',x.shape)
             optimizer.zero_grad()
 
             x = torch.tensor(x).to(device)
@@ -108,11 +88,11 @@ def train(net, criterion, optimizer, n_vocab, in_text, out_text, vocab_to_int, i
 
             loss.backward()
 
-            #IMPORTANT for autograd. idky
+            # IMPORTANT for autograd. idky
             state_h = state_h.detach()
             state_c = state_c.detach()
 
-            #gradient clipping 
+            # gradient clipping
             _ = torch.nn.utils.clip_grad_norm_(
                 net.parameters(), values.gradients_norm)
 
@@ -131,13 +111,13 @@ def train(net, criterion, optimizer, n_vocab, in_text, out_text, vocab_to_int, i
 
 def predict(device, net, words, n_vocab, vocab_to_int, int_to_vocab, top_k=values.predict_top_k):
     net.eval()
-    #words = flags.initial_words
+    # words = flags.initial_words
     words = ['Harry', 'Potter']
-    #words = ['Sehr']
-    
+    # words = ['Sehr']
+
     state_h = net.zero_state(1).to(device)
     state_c = net.zero_state(1).to(device)
-    
+
     for w in words:
         ix = torch.tensor([[vocab_to_int[w]]]).to(device)
         output, (state_h, state_c) = net(ix, (state_h, state_c))
@@ -148,6 +128,7 @@ def predict(device, net, words, n_vocab, vocab_to_int, int_to_vocab, top_k=value
 
     words.append(int_to_vocab[choice])
 
+    number_of_sent = 0
     for _ in range(100):
         ix = torch.tensor([[choice]]).to(device)
         output, (state_h, state_c) = net(ix, (state_h, state_c))
@@ -155,6 +136,12 @@ def predict(device, net, words, n_vocab, vocab_to_int, int_to_vocab, top_k=value
         _, top_ix = torch.topk(output[0], k=top_k)
         choices = top_ix.tolist()
         choice = np.random.choice(choices[0])
+        # -----test
+        if choice.contains('.'):
+            number_of_sent = number_of_sent + 1
+            if number_of_sent >= 5:
+                break
+        # ------test
         words.append(int_to_vocab[choice])
 
     print(' '.join(words))
@@ -167,11 +154,12 @@ def main():
 
     net = RNN(n_vocab, values.embedding_size, values.lstm_size)
     net = net.to(device)
-    
+
     criterion, optimizer = get_loss_and_train_op(net, 0.001)
 
     net = train(net, criterion, optimizer, n_vocab, in_text, out_text, vocab_to_int, int_to_vocab, device)
 
+    torch.save(net,'/data/myNet.pt')
 
 if __name__ == '__main__':
     main()
